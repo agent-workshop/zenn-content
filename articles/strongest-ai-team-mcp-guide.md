@@ -1,5 +1,5 @@
 ---
-title: "【ソースコード付】個人PCに『最強のAI開発チーム』を雇う方法：MCPとマルチエージェント完全実装ガイド"
+title: "MCPで自律型AIチームを作る実装ログ【要点版】"
 emoji: "🤖"
 type: "tech"
 topics: ["ai", "mcp", "multiagent", "typescript", "bun"]
@@ -26,8 +26,11 @@ published: true
 ### この記事で得られるもの
 - **自律型AIチームの設計思想**: なぜPM・実装・レビューに分けるのか？
 - **MCPの実践的活用**: ツールやメモリをエージェント間で共有する具体的なコード
-- **納得テスト（Nattoku Test）**: AIの成果物を定量評価し、品質を担保する独自手法（有料パート）
-- **失敗の博物館**: 私たちが踏み抜いた「無限ループ」や「ハルシネーション」の泥臭い事例と対策（有料パート）
+- **最小構成のMCPサーバー実装**: Bun + TypeScriptで動くサンプルコード
+
+:::message
+本記事は要点版です。品質保証手法「納得テスト」の実装コード、エージェント間連携の実践コード、失敗事例と対策を含む**完全版**は[noteで公開中](https://note.com/agent_workshop/n/n9217c45f117e?utm_source=zenn&utm_medium=article&utm_campaign=mcp_guide)です。
+:::
 
 さあ、あなたのPCに「最強のチーム」を迎え入れましょう。
 
@@ -187,218 +190,23 @@ bun run client.ts
 
 ---
 
-## ⭐️ ここから有料パート ⭐️
+## この先の内容
 
-## 第4章: 品質を保証する「納得テスト」
+ここまでで、MCPの基本概念と最小構成のサーバー実装を体験できました。
 
-AIエージェントを作っていて一番困るのが、**「正解がない」** ということです。
-普通のプログラムなら「1+1=2」かどうかテストを書けば済みますが、AIの生成物は「動くけど、なんか違う」ということが多々あります。
+実際のプロジェクトでは、ここからさらに以下の課題に取り組む必要があります：
 
-そこで私たちが開発したのが、**「納得テスト（Nattoku Test）」** です。
-これは、人間の主観的な「納得感」をスコア化し、それをAIの学習（プロンプト改善）にフィードバックする仕組みです。
+- **品質保証**: AIの出力を定量評価する仕組み（私たちは「納得テスト」と呼んでいます）
+- **エージェント間連携**: PM→実装→レビューの連携コード
+- **失敗対策**: 無限ループ、ハルシネーション連鎖、コンテキスト溢れへの対処法
 
-### 納得テストの仕組み
-私たちは、タスクが完了するたびに、以下の3つのデータを記録しています。
+これらの実装コード・失敗事例・対策を含む**完全版ガイド（全6章）** は、noteで公開しています。
 
-1.  **納得度スコア**: 1（やり直し）〜 5（最高）の5段階評価
-2.  **違和感タグ**: 「冗長」「文脈無視」「ハルシネーション」などのタグ選択
-3.  **一言コメント**: 「もっと具体例が欲しい」「トーンが硬い」などの定性フィードバック
+:::message alert
+**完全版はこちら**
+[【ソースコード付】個人PCに「最強のAI開発チーム」を雇う方法：MCPとマルチエージェント完全実装ガイド](https://note.com/agent_workshop/n/n9217c45f117e?utm_source=zenn&utm_medium=article&utm_campaign=mcp_guide)
 
-実際のログデータ（NT-ID）はこんな感じです。
-
-```yaml
-# 実際のログ例: NT-20260215-001
-task_id: "20260215_003000_puwq"
-agent: "rei"
-rating: 4
-tags: ["few-shot有効", "具体性が高い"]
-comment: "話者別の態度変化が具体的でよかった。Few-shotの例示も分かりやすい。"
-```
-
-このデータが蓄積されると、「スコア4以上のプロンプト例（Few-shot）」が自動的にデータベース化されます。
-次回似たようなタスクが発生したとき、AIは過去の高評価事例を参照して、**「ユーザー好みの出力」** を最初から出せるようになるのです。
-
-### 実装コード（nattoku-cli.py）
-この仕組みをCLIツールとして実装するPythonスクリプトの核心部分を公開します。
-
-```python
-def submit_feedback(task_id, rating, tags, comment):
-    """納得テストの結果を記録し、学習データとして蓄積する"""
-
-    # データのバリデーション
-    if not (1 <= rating <= 5):
-        raise ValueError("Rating must be between 1 and 5")
-
-    feedback_data = {
-        "id": generate_nattoku_id(),
-        "task_id": task_id,
-        "rating": rating,
-        "tags": tags,
-        "comment": comment,
-        "timestamp": datetime.now().isoformat()
-    }
-
-    # 1. ログファイルへの追記（即時保存）
-    append_to_log("nattoku_history.jsonl", feedback_data)
-
-    # 2. 高評価データの抽出（スコア4以上）
-    if rating >= 4:
-        save_as_few_shot_example(task_id, feedback_data)
-
-    # 3. 低評価データの分析（スコア2以下）
-    if rating <= 2:
-        register_failure_case(task_id, feedback_data)
-
-    return feedback_data
-```
-
-このように、**「褒められたら手本にする」「怒られたら反省文を書く」** というサイクルを自動化することで、エージェントは使えば使うほど賢くなっていきます。
-
----
-
-## 第5章: 実践編 〜MCPでエージェント同士を会話させる〜
-
-第3章では簡単な計算サーバーを作りましたが、ここではより実践的な **「エージェント同士の連携」** を実装します。
-PMエージェントがタスクを分解し、実装エージェントに指示を出し、レビューエージェントがチェックする流れです。
-
-### エージェントクラスの設計
-まず、共通の `BaseAgent` クラスを定義し、各役割のエージェントに継承させます。
-
-```typescript
-// src/agents/base.ts
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { LLMClient } from "./llm-client"; // 各自のLLMクライアントラッパー
-
-export abstract class BaseAgent {
-  protected llm: LLMClient;
-  protected mcpClient: Client;
-
-  constructor(name: string, mcpClient: Client) {
-    this.llm = new LLMClient({ systemPrompt: this.getSystemPrompt() });
-    this.mcpClient = mcpClient;
-  }
-
-  // 役割ごとのシステムプロンプト
-  abstract getSystemPrompt(): string;
-
-  // メッセージ送信
-  async sendMessage(to: BaseAgent, message: string): Promise<string> {
-    console.log(`[${this.constructor.name}] -> [${to.constructor.name}]: ${message}`);
-    const response = await to.receiveMessage(message);
-    return response;
-  }
-
-  // メッセージ受信（LLMで応答生成）
-  async receiveMessage(message: string): Promise<string> {
-    // コンテキストにメッセージを追加し、LLMに推論させる
-    const response = await this.llm.chat(message);
-
-    // 必要ならMCPツールを実行
-    if (response.toolCalls) {
-        // ...ツール実行ロジック...
-    }
-
-    return response.text;
-  }
-}
-```
-
-### 役割の実装
-次に、PMと実装担当のエージェントを作ります。
-
-```typescript
-// src/agents/pm.ts
-export class PMAgent extends BaseAgent {
-  getSystemPrompt() {
-    return "あなたは優秀なプロジェクトマネージャーです。ユーザーの要望を技術的なタスクに分解し、DeveloperAgentに指示を出してください。";
-  }
-}
-
-// src/agents/developer.ts
-export class DeveloperAgent extends BaseAgent {
-  getSystemPrompt() {
-    return "あなたは熟練のTypeScriptエンジニアです。PMAgentの指示に従い、高品質なコードを書いてください。MCPツールを使ってファイル操作が可能です。";
-  }
-}
-```
-
-### オーケストレーター（指揮者）の実装
-最後に、これらを動かすメインスクリプトです。
-
-```typescript
-// main.ts
-const pm = new PMAgent("yui", mcpClient);
-const dev = new DeveloperAgent("rei", mcpClient);
-
-// ユーザーからの依頼
-const userRequest = "現在の日付を表示する簡単なPythonスクリプトを作って";
-
-// PMがタスクを開始
-const result = await pm.receiveMessage(`ユーザーからの依頼: ${userRequest}`);
-
-// PMがDevに指示（内部でsendMessageが呼ばれる）
-// ...（LLMの判断により、pm.sendMessage(dev, "Pythonスクリプトを作成してください...") が実行される）
-
-console.log("最終成果物:", result);
-```
-
-このようにエージェントをオブジェクトとして定義し、メッセージパッシングで連携させることで、**「組織」** としての振る舞いをコード上で再現できます。
-
----
-
-## 第6章: 失敗博物館 〜私たちが踏み抜いた3つの落とし穴〜
-
-最後に、私たちが実際に経験した失敗事例と、その対策を共有します。
-これからエージェント開発をする皆さんが、同じ轍を踏まないように。
-
-### 失敗1: 「お互いを褒め合って進まない」問題
-PM「素晴らしいコードですね！」
-Dev「ありがとうございます！PMの指示のおかげです！」
-PM「いえいえ、あなたの実装力あってこそです！」
-...（無限ループ）
-
-**原因**: エージェントに「協調性」を持たせすぎた結果、挨拶やお世辞でコンテキストを浪費してしまう。
-**対策**: システムプロンプトに **「挨拶禁止。出力は成果物のみに限定せよ」** と明記する。また、会話ターン数に上限を設ける番犬（Watchdog）機能を実装する。
-
-### 失敗2: 「ハルシネーションの連鎖」
-Devが実在しないライブラリ関数を使い、Reviewerが「いいですね！」と承認してしまう。
-**原因**: Reviewerも同じLLMを使っているため、同じ知識バイアス（間違い）を共有してしまう。
-**対策**:
-1. Reviewerには別のモデル（例: DevがGPT-4ならReviewerはClaude Sonnet）を使う。
-2. **「コード実行テスト」** を必須にする。実際に動かしてエラーが出れば、ハルシネーションは即座にバレる。
-
-### 失敗3: 「コンテキスト溢れによる健忘症」
-長い会話の末、エージェントが最初の要件（「Pythonで作って」と言ったのにTypeScriptで書くなど）を忘れる。
-**原因**: LLMのコンテキストウィンドウ（記憶容量）を超えてしまい、古い情報が押し出された。
-**対策**:
-1. **「要約エージェント」** を導入し、定期的に会話ログを要約してコンテキストを圧縮する。
-2. 重要な決定事項（仕様、技術スタックなど）は、会話ログとは別の **「メモリ（Shared Memory）」** に保存し、常にプロンプトの先頭に挿入する。
-
----
-
-## おわりに: あなたのPCに「相棒」を
-
-ここまで読んでいただき、ありがとうございます。
-AIエージェントチームの構築は、最初は難しく感じるかもしれません。しかし、一度動き始めれば、彼らはあなたの最強の味方になります。
-
-私たち「auto-income」プロジェクトも、まだ道半ばです。
-しかし、この **「自分だけのチームを持つ」** という感覚は、何物にも代えがたいワクワク感があります。
-
-ぜひ、今回紹介したコードを動かしてみてください。
-そして、あなただけの相棒（エージェント）を見つけてください。
-
----
-
-## 次ステップ & さらに強力な武器を準備中
-
-この記事で紹介した **「納得テスト」** の仕組みを使えば、AIエージェントは使えば使うほど、あなたの好みに合った「最高の相棒」に成長します。
-ぜひ、ご自身のPCで試してみてください。
-
-現在、この記事の実践コードをさらに強化した **「エージェント開発用コードスニペット集（完全版）」** を準備しています。
-- エラー時の自動リトライ機能付きLLMクライアント
-- 安全なファイル操作MCPサーバー（パス制限機能付き）
-- 会話履歴の自動要約メモリ
-
-これらは近日中に公開予定です。見逃さないよう、今のうちに **noteのフォロー** をお願いします。
-
-また、この記事が役に立った！と思ったら、ぜひ **スキ（♡）** を押していただけると幸いです。
+- 第4章: 品質保証「納得テスト」の全貌と実装コード
+- 第5章: MCPでエージェント同士を会話させる実践コード
+- 第6章: 失敗博物館 — 踏み抜いた3つの落とし穴と対策
+:::
