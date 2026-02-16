@@ -3,7 +3,7 @@ title: "AIに「1円稼いで」と言ったら何が起きたか — 自走型A
 emoji: "💸"
 type: "idea"
 topics: ["ai", "mcp", "自動化", "typescript", "個人開発"]
-published: false
+published: true
 ---
 
 ## はじめに: 「1円」は遠かった
